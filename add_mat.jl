@@ -1,0 +1,115 @@
+using CUDAdrv, CUDAnative,CuArrays
+using Test, BenchmarkTools
+
+struct Config
+  threads
+  blocks
+end
+
+function hadd_mat(a,b,c)
+  ny,nx = size(a)
+  for i in 1:ny
+    for j in 1:nx
+      c[i,j] = a[i,j] + b[i,j]
+    end
+  end
+end
+
+#2DGrid & 2Dblock
+function dadd_mat2DG2DB(a,b,c,nx,ny)
+  #@cuprintf("nx:%d ny:%d length \n",nx,ny,length(a))
+  ix = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+  iy = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+
+  #ここは配列が1から始まるので、1引いておく
+  idx = (iy - 1) * nx + ix
+
+  #Juliaの整数型は64bitsなので、printfでとるときは%ldになる。Cの整数型は32bitsなので%dになる。
+  #@cuprintf("threadIdx:(%ld,%ld,%ld)blockIdx:(%ld,%ld,%ld)blockDim:(%ld,%ld,%ld)gridDim:(%ld,%ld,%ld)\n",
+  #threadIdx().x,threadIdx().y,threadIdx().z,blockIdx().x,blockIdx().y,blockIdx().z,
+  #blockDim().x,blockDim().y,blockDim().z,gridDim().x,gridDim().y,gridDim().z)
+  #@cuprintf("ix:%ld iy:%ld nx:%ld idx:%ld\n",ix,iy,nx,idx)
+  if ix <= nx && iy <= ny
+    c[idx] = a[idx] + b[idx]
+  end
+  return nothing
+end
+
+#1DGrid & 1Dblock
+function dadd_mat1DG1DB(a,b,c,nx,ny)
+  ix = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+
+  if ix <= nx
+    for iy in 1:ny
+      idx = (iy -1 )*nx + ix
+      c[idx] = a[idx] + b[idx]
+    end
+  end
+  return nothing
+end
+
+#2DGrid & 1Dblock
+function dadd_mat2DG1DB(a,b,c,nx,ny)
+  ix = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+  iy = blockIdx().y
+  idx = (iy -1 ) * nx + ix
+
+  if ix <= nx && iy <= ny
+      c[idx] = a[idx] + b[idx]
+  end
+  return nothing
+end
+
+
+function bench_dadd_mat2DG2DB(a,b,c,setting::Config,mat_dim)
+    CuArrays.@sync begin
+        @cuda threads=setting.threads blocks=setting.blocks dadd_mat2DG2DB(a,b,c,mat_dim...)
+    end
+end
+
+function bench_dadd_mat1DG1DB(a,b,c,setting::Config,mat_dim)
+    CuArrays.@sync begin
+        @cuda threads=setting.threads blocks=setting.blocks dadd_mat1DG1DB(a,b,c,mat_dim...)
+    end
+end
+
+function bench_dadd_mat2DG1DB(a,b,c,setting::Config,mat_dim)
+    CuArrays.@sync begin
+        @cuda threads=setting.threads blocks=setting.blocks dadd_mat2DG1DB(a,b,c,mat_dim...)
+    end
+end
+
+N = 2^14
+mat_dims = (N,N)
+a = rand(mat_dims...)
+b = rand(mat_dims...)
+c = similar(a)
+
+
+d_a = CuArray(a)
+d_b = CuArray(b)
+d_c = CuArray(c)
+
+c = a .+ b
+#hadd_mat(a,b,c)
+#d_c = d_a .+ d_b
+
+#2DG2DB
+#numthreads = (2^4,2^4)
+#numblocks = ceil.(Int,mat_dims./numthreads)
+
+#1DG1DB
+#numthreads = (2^7,1)
+#numblocks = ceil.(Int,(mat_dims[1] / numthreads[1],1))
+
+#2DG1DB
+numthreads = (2^8 ,1)
+numblocks = ceil.(Int,(mat_dims[1] / numthreads[1],mat_dims[2]))
+
+println("threads:$(numthreads) , blocks:$(numblocks)")
+#@cuda threads=numthreads blocks=numblocks dadd_mat1DG1DB(d_a,d_b,d_c,mat_dims...)
+
+setting = Config(numthreads,numblocks)
+@btime bench_dadd_mat2DG1DB(d_a,d_b,d_c,setting,mat_dims)
+
+@show (@test all(Array(d_c) .== c))
