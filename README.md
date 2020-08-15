@@ -1,4 +1,4 @@
-# JuliaでGPUを動かす練習用レポジトリ
+# JuliaでGPUを使う練習
 
 JuliaでGPUを使うためにした練習用のコード
 
